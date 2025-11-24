@@ -118,14 +118,14 @@ class OrderController extends Controller
         ->first();
 
     // Fetch full MenuItem with Category if item was found
-    $bestSelling = $bestItemRow ? MenuItem::with('category')->find($bestItemRow->menu_item_id) : null;
+    $bestSellingItem = $bestItemRow ? MenuItem::with('category')->find($bestItemRow->menu_item_id) : null;
 
     // Return all stats for frontend dashboard
     return response()->json([
         'today_revenue' => $revenueToday,
         'order_count' => $orderCount,
-        'best_selling_item' => $bestSelling ? $bestSelling->name : null,
-        'best_selling_category' => $bestSelling && $bestSelling->category ? $bestSelling->category->name : null,
+        'best_selling_item' => $bestSellingItem ? $bestSellingItem->name : null,
+        'best_selling_category' => $bestSellingItem && $bestSellingItem->category ? $bestSellingItem->category->name : null,
     ]);
 }
 
