@@ -4,21 +4,21 @@ namespace App\Models;
 
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Laravel\Sanctum\HasApiTokens;   // add this
+use Laravel\Sanctum\HasApiTokens; // Add this
 
-class User extends Authenticatable
+class Admin extends Authenticatable
 {
-    use HasApiTokens, Notifiable;   // add HasApiTokens
+    use Notifiable, HasApiTokens; // Add HasApiTokens here
+
+    protected $table = 'admins';
 
     protected $fillable = [
-        'name',
-        'email',
+        'username',
         'password',
-       
+        'role',
     ];
 
     protected $hidden = [
         'password',
-        'remember_token',
     ];
 }

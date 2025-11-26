@@ -109,25 +109,75 @@ class OrderController extends Controller
     $revenueToday = Order::whereDate('created_at', today())->sum('total_amount');
     $orderCount = Order::whereDate('created_at', today())->count();
 
-    // Use Query Builder for best selling menu item by quantity sold
     $bestItemRow = DB::table('order_items')
         ->select('menu_item_id', DB::raw('SUM(quantity) as total_sold'))
-        ->whereIn('order_id', Order::whereDate('created_at', today())->pluck('id'))
+        ->whereIn('order_id', function ($query) {
+            $query->select('id')
+                ->from('orders')
+                ->whereDate('created_at', today());
+        })
         ->groupBy('menu_item_id')
         ->orderByDesc('total_sold')
         ->first();
 
-    // Fetch full MenuItem with Category if item was found
-    $bestSellingItem = $bestItemRow ? MenuItem::with('category')->find($bestItemRow->menu_item_id) : null;
+    $bestSellingItem = $bestItemRow ? 
+        MenuItem::with('category')->find($bestItemRow->menu_item_id) : 
+        null;
 
-    // Return all stats for frontend dashboard
     return response()->json([
-        'today_revenue' => $revenueToday,
-        'order_count' => $orderCount,
-        'best_selling_item' => $bestSellingItem ? $bestSellingItem->name : null,
-        'best_selling_category' => $bestSellingItem && $bestSellingItem->category ? $bestSellingItem->category->name : null,
+        'today_revenue' => $revenueToday ?? 0,
+        'order_count' => $orderCount ?? 0,
+        'best_selling_item' => $bestSellingItem->name ?? 'N/A',
+        'best_selling_category' => $bestSellingItem->category->name ?? 'N/A',
+        'total_sold' => $bestItemRow->total_sold ?? 0,
     ]);
 }
+
+public function show($id)
+{
+    try {
+        $order = Order::with(['items.menuItem'])->find($id);
+
+        if (!$order) {
+            return response()->json([
+                'error' => 'Order not found'
+            ], 404);
+        }
+
+        // Format items for frontend
+        $items = $order->items->map(function ($item) {
+            return [
+                'id' => $item->id,
+                'item_name' => optional($item->menuItem)->name ?? 'Unknown Item',
+                'item_price' => $item->item_price,
+                'quantity' => $item->quantity,
+                'subtotal' => $item->subtotal,
+            ];
+        });
+
+        // Final order structure
+        return response()->json([
+            'order' => [
+                'id' => $order->id,
+                'order_number' => $order->order_number,
+                'customer_name' => $order->customer_name,
+                'order_type' => $order->order_type,
+                'status' => $order->status,
+                'total_amount' => $order->total_amount,
+                'created_at' => $order->created_at->toIso8601String(),
+                'items' => $items,
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'error' => 'Server error',
+            'message' => $e->getMessage()
+        ], 500);
+    }
+}
+
+
 
 
 }
