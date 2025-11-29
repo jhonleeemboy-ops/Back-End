@@ -11,7 +11,9 @@ return new class extends Migration {
         Schema::create('menu_items', function (Blueprint $table) {
             $table->id();
             $table->string('name');
+            $table->string('availabillity');
             $table->decimal('price', 8, 2);
+
             $table->foreignId('category_id')->constrained('categories')->onDelete('cascade');
             $table->timestamps(); // created_at, updated_at
         });

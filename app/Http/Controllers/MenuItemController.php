@@ -22,6 +22,7 @@ class MenuItemController extends Controller
         $data = $request->validate([
             'name' => 'required|string',
             'price' => 'required|numeric',
+            'availabillity' => 'required|string',
             'category_id' => 'required|exists:categories,id',
         ]);
 
@@ -34,6 +35,7 @@ class MenuItemController extends Controller
         $data = $request->validate([
             'name' => 'sometimes|string',
             'price' => 'sometimes|numeric',
+            'availabillity' => 'required|string',
             'category_id' => 'sometimes|exists:categories,id',
         ]);
 
