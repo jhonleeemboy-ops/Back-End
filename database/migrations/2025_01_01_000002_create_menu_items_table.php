@@ -12,6 +12,7 @@ return new class extends Migration {
             $table->id();
             $table->string('name');
             $table->decimal('price', 8, 2);
+            $table->boolean('is_available')->default(true);
             $table->foreignId('category_id')->constrained('categories')->onDelete('cascade');
             $table->timestamps(); // created_at, updated_at
         });

@@ -22,8 +22,13 @@ class MenuItemController extends Controller
         $data = $request->validate([
             'name' => 'required|string',
             'price' => 'required|numeric',
+            'is_available' => 'sometimes|boolean',
             'category_id' => 'required|exists:categories,id',
         ]);
+
+        if (!array_key_exists('is_available', $data)) {
+            $data['is_available'] = true;
+        }
 
         $item = MenuItem::create($data);
         return response()->json($item, 201);
@@ -34,6 +39,7 @@ class MenuItemController extends Controller
         $data = $request->validate([
             'name' => 'sometimes|string',
             'price' => 'sometimes|numeric',
+            'is_available' => 'sometimes|boolean',
             'category_id' => 'sometimes|exists:categories,id',
         ]);
 

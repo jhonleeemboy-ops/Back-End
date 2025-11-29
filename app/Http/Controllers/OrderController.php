@@ -14,7 +14,14 @@ class OrderController extends Controller
     // List all orders with nested relationships
     public function index()
     {
-        $orders = Order::with(['items.menuItem.category'])
+        $orders = Order::select('id','order_number','customer_name','order_type','status','total_amount','created_at')
+            ->with([
+                'items' => function($q){
+                    $q->select('id','order_id','menu_item_id','item_price','quantity','subtotal');
+                },
+                'items.menuItem:id,name'
+            ])
+            ->whereDate('created_at', today())
             ->orderBy('created_at', 'desc')
             ->get();
 
@@ -34,8 +41,12 @@ class OrderController extends Controller
 
         DB::beginTransaction();
         try {
-            $totalAmount = collect($validated['items'])->sum(function ($item) {
-                $menuItem = MenuItem::find($item['menu_item_id']);
+            $ids = collect($validated['items'])->pluck('menu_item_id');
+            $menuItems = MenuItem::whereIn('id', $ids)->get()->keyBy('id');
+
+            $totalAmount = collect($validated['items'])->sum(function ($item) use ($menuItems) {
+                $menuItem = $menuItems->get($item['menu_item_id']);
+
                 return ($menuItem ? $menuItem->price : 0) * $item['quantity'];
             });
 
@@ -48,13 +59,14 @@ class OrderController extends Controller
             ]);
 
             $order->items()->createMany(
-                collect($validated['items'])->map(function ($item) {
-                    $menuItem = MenuItem::find($item['menu_item_id']);
+                collect($validated['items'])->map(function ($item) use ($menuItems) {
+                    $menuItem = $menuItems->get($item['menu_item_id']);
+                    $price = $menuItem ? $menuItem->price : 0;
                     return [
                         'menu_item_id' => $item['menu_item_id'],
-                        'item_price'   => $menuItem->price,
+                        'item_price'   => $price,
                         'quantity'     => $item['quantity'],
-                        'subtotal'     => $menuItem->price * $item['quantity'],
+                        'subtotal'     => $price * $item['quantity'],
                     ];
                 })->toArray()
             );
@@ -106,17 +118,17 @@ class OrderController extends Controller
     // Dashboard best selling item logic
     public function dashboardStats()
 {
-    $revenueToday = Order::whereDate('created_at', today())->sum('total_amount');
-    $orderCount = Order::whereDate('created_at', today())->count();
+    $start = now()->startOfDay();
+    $end = now()->endOfDay();
+
+    $revenueToday = Order::whereBetween('created_at', [$start, $end])->sum('total_amount');
+    $orderCount = Order::whereBetween('created_at', [$start, $end])->count();
 
     $bestItemRow = DB::table('order_items')
-        ->select('menu_item_id', DB::raw('SUM(quantity) as total_sold'))
-        ->whereIn('order_id', function ($query) {
-            $query->select('id')
-                ->from('orders')
-                ->whereDate('created_at', today());
-        })
-        ->groupBy('menu_item_id')
+        ->join('orders', 'order_items.order_id', '=', 'orders.id')
+        ->whereBetween('orders.created_at', [$start, $end])
+        ->select('order_items.menu_item_id', DB::raw('SUM(order_items.quantity) as total_sold'))
+        ->groupBy('order_items.menu_item_id')
         ->orderByDesc('total_sold')
         ->first();
 
