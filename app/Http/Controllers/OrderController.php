@@ -8,6 +8,7 @@ use App\Models\OrderItem;
 use App\Models\MenuItem;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Carbon\Carbon;
 
 class OrderController extends Controller
 {
@@ -72,6 +73,35 @@ class OrderController extends Controller
             );
 
             DB::commit();
+
+            // Update daily stats table
+        try {
+            $tz = config('app.timezone');
+            $date = $order->created_at->setTimezone($tz)->toDateString();
+
+            $existing = DB::table('order_daily_stats')->where('stat_date', $date)->first();
+
+            if ($existing) {
+                DB::table('order_daily_stats')
+                    ->where('id', $existing->id)
+                    ->update([
+                        'revenue_sum' => DB::raw('revenue_sum + ' . (float) $order->total_amount),
+                        'order_count' => DB::raw('order_count + 1'),
+                        'updated_at' => now(),
+                    ]);
+            } else {
+                DB::table('order_daily_stats')
+                    ->insert([
+                        'stat_date' => $date,
+                        'revenue_sum' => (float) $order->total_amount,
+                        'order_count' => 1,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+            }
+        } catch (\Throwable $e) {
+            // swallow stats errors to not impact order creation
+        }
 
             return response()->json([
                 'message' => 'Order created successfully',
@@ -144,6 +174,42 @@ class OrderController extends Controller
         'total_sold' => $bestItemRow->total_sold ?? 0,
     ]);
 }
+
+// Admin weekly/daily statistics
+    public function adminStats()
+    {
+        $tz = config('app.timezone');
+        $now = Carbon::now($tz);
+        $start = (clone $now)->startOfWeek(Carbon::MONDAY);
+        $end = (clone $start)->endOfWeek(Carbon::SUNDAY);
+
+        // Prefer stats table
+        $rows = DB::table('order_daily_stats')
+            ->select('stat_date as day', 'revenue_sum as revenue', 'order_count as orders')
+            ->whereDate('stat_date', '>=', $start->toDateString())
+            ->whereDate('stat_date', '<=', $end->toDateString())
+            ->orderBy('stat_date', 'asc')
+            ->get()
+            ->keyBy('day');
+
+        $weeklyRevenue = [];
+        $weeklyOrders = [];
+        $days = [];
+
+        for ($d = 0; $d < 7; $d++) {
+            $date = (clone $start)->addDays($d)->toDateString();
+            $row = $rows->get($date) ?? null;
+            $weeklyRevenue[] = $row ? (float) $row->revenue : 0.0;
+            $weeklyOrders[] = $row ? (int) $row->orders : 0;
+            $days[] = $date;
+        }
+
+        return response()->json([
+            'weeklyRevenue' => $weeklyRevenue,
+            'weeklyOrders' => $weeklyOrders,
+            'days' => $days,
+        ]);
+    }
 
 public function show($id)
 {

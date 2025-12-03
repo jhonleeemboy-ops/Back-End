@@ -22,6 +22,7 @@ Route::post('/orders/{id}/complete', [OrderController::class, 'markAsCompleted']
 Route::patch('/orders/{id}', [OrderController::class, 'update']);
 
 Route::get('/dashboard-stats', [OrderController::class, 'dashboardStats']);
+Route::get('/admin/stats', [OrderController::class, 'adminStats']);
 Route::get('/orders/{id}', [OrderController::class, 'show']);
 Route::get('/orders', [OrderController::class, 'index']);
 
