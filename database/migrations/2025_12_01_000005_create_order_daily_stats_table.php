@@ -12,6 +12,8 @@ return new class extends Migration {
             $table->date('stat_date')->unique();
             $table->decimal('revenue_sum', 12, 2)->default(0);
             $table->unsignedInteger('order_count')->default(0);
+            $table->unsignedBigInteger('top_item_id')->nullable();
+            $table->unsignedInteger('top_item_quantity')->default(0);
             $table->timestamps();
         });
     }

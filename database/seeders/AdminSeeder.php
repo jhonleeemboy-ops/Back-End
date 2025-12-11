@@ -10,10 +10,12 @@ class AdminSeeder extends Seeder
 {
     public function run(): void
     {
-        Admin::create([
-            'username' => 'admin',
-            'password' => Hash::make('password'),
-            'role' => 'admin'
-        ]);
+        Admin::updateOrCreate(
+            ['username' => 'admin'],  // Search by username
+            [
+                'password' => Hash::make('password'),  // Update/set these fields
+                'role' => 'admin'
+            ]
+        );
     }
 }

@@ -17,9 +17,10 @@ return new class extends Migration
     $table->id();
     $table->foreignId('order_id')->constrained()->onDelete('cascade');
     $table->foreignId('menu_item_id')->constrained('menu_items')->onDelete('cascade');
-    $table->decimal('item_price', 8, 2);
+    $table->string('size')->nullable();
     $table->integer('quantity');
     $table->decimal('subtotal', 8, 2);
+    $table->json('add_ons')->nullable();
     $table->timestamps();
 });
 
