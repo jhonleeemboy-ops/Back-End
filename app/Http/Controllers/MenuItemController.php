@@ -57,7 +57,22 @@ class MenuItemController extends Controller
             'image' => 'nullable|image|mimes:jpeg,jpg,png,webp|max:5120',
         ]);
 
+        $removeImage = $request->boolean('remove_image', false);
+        if ($removeImage && $menuItem->image_url) {
+            $relative = ltrim(str_replace('/storage/', '', $menuItem->image_url), '/');
+            if ($relative) {
+                Storage::disk('public')->delete($relative);
+            }
+            $data['image_url'] = null;
+        }
+
         if ($request->hasFile('image')) {
+            if ($menuItem->image_url) {
+                $relative = ltrim(str_replace('/storage/', '', $menuItem->image_url), '/');
+                if ($relative) {
+                    Storage::disk('public')->delete($relative);
+                }
+            }
             $path = $request->file('image')->store('menu-images', 'public');
             $data['image_url'] = Storage::url($path);
         }
