@@ -166,20 +166,29 @@ class OrderController extends Controller
 
     // Update order fields (status, etc)
     public function update(Request $request, $id)
-    {
-        $order = Order::find($id);
-        if (!$order) {
-            return response()->json(['error' => 'Order not found'], 404);
-        }
-        if ($request->has('status')) {
-            $order->status = $request->input('status');
-        }
-        $order->save();
-        return response()->json([
-            'message' => 'Order updated successfully',
-            'order'   => $order->load('items.menuItem.category')
-        ], 200);
+{
+    $order = Order::find($id);
+    
+    if (!$order) {
+        return response()->json(['error' => 'Order not found'], 404);
     }
+    
+    // Only allow updating status
+    $request->validate([
+        'status' => 'required|string|in:pending,preparing,ready,completed'
+    ]);
+    
+    $order->status = $request->status;
+    $order->save();
+    
+    return response()->json([
+        'message' => 'Order updated successfully',
+        'order' => [
+            'id' => $order->id,
+            'status' => $order->status
+        ]
+    ], 200);
+}
 
     // Mark as completed directly
     public function markAsCompleted($id)
@@ -196,14 +205,25 @@ class OrderController extends Controller
     // Optimized to reduce DB calls by combining aggregates
     public function dashboardStats()
     {
-        // Combine revenue and count into a single aggregate query
-        $stats = Order::whereDate('created_at', today())
+           
+           $orders = Order::with(['items'])
+           ->whereDate('created_at', today())
             ->where('status', 'completed')
-            ->selectRaw('SUM(total_amount) as revenue, COUNT(*) as count')
-            ->first();
+            ->get();
 
-        $revenueToday = $stats->revenue ?? 0;
-        $orderCount = $stats->count ?? 0;
+            $revenueToday = 0.0;
+        foreach ($orders as $order) {
+            foreach ($order->items as $it) {
+                $rawAddOns = $it->add_ons ?? [];
+                $addOns = is_string($rawAddOns) ? (json_decode($rawAddOns, true) ?: []) : (is_array($rawAddOns) ? $rawAddOns : []);
+                $addTotal = 0.0;
+                foreach ($addOns as $a) {
+                    $addTotal += (float) ($a['amount'] ?? 0);
+                }
+                $revenueToday += ((float) $it->item_price * (int) ($it->quantity ?? 0)) + $addTotal;
+            }
+        }
+        $orderCount = $orders->count();
 
         // Find best selling item
         $bestItemRow = DB::table('order_items')
