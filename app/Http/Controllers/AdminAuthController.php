@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Admin; // Change this from User to Admin
+use App\Models\Admin; 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 
@@ -15,11 +15,13 @@ class AdminAuthController extends Controller
             'password' => 'required',
         ]);
 
-        $admin = Admin::where('username', $request->username)->first(); // Use Admin model
+        $admin = Admin::where('username', $request->username)->first(); 
 
         if (! $admin || ! Hash::check($request->password, $admin->password)) {
             return response()->json(['message' => 'Invalid credentials'], 401);
         }
+
+        $admin->tokens()->delete();
 
         $token = $admin->createToken('admin-token')->plainTextToken;
 
@@ -28,64 +30,14 @@ class AdminAuthController extends Controller
             'token' => $token,
         ]);
     }
+
+    
+    public function logout(Request $request)
+    {
+        $request->user()->tokens()->delete();
+        
+        return response()->json([
+            'message' => 'Logged out successfully'
+        ]);
+    }
 }
-
-
-
-// namespace App\Http\Controllers;
-
-// use Illuminate\Http\Request;
-// use Illuminate\Support\Facades\Hash;
-// use App\Models\User;
-
-
-// class AdminAuthController extends Controller
-// {
-//     public function login(Request $request)
-//     {
-//         $username = env('ADMIN_USERNAME');
-//         $password = env('ADMIN_PASSWORD');
-//         $token    = env('ADMIN_TOKEN');
-
-//         if ($request->username === $username && $request->password === $password) {
-//             return response()->json([
-//                 'token' => $token,
-//                 'message' => 'Login success'
-//             ]);
-//         }
-
-//         return response()->json([
-//             'message' => 'Invalid admin credentials'
-//         ], 401);
-//     }
-// }
-
-
-// class AdminAuthController extends Controller
-// {
-//     public function login(Request $request)
-//     {
-//         $request->validate([
-//             'username' => 'required',
-//             'password' => 'required',
-//         ]);
-
-//         Admin login is using "name" as username
-//         $admin = User::where('name', $request->username)
-//                      ->where('role', 'admin')
-//                      ->first();
-
-//         if (!$admin || !Hash::check($request->password, $admin->password)) {
-//             return response()->json(['message' => 'Invalid admin credentials'], 401);
-//         }
-
-//         // Create token
-//         $token = $admin->createToken('admin-token')->plainTextToken;
-
-//         return response()->json([
-//             'message' => 'Admin login successful',
-//             'token' => $token,
-//             'admin' => $admin
-//         ]);
-//     }
-// }

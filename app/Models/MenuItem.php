@@ -9,7 +9,11 @@ class MenuItem extends Model
     protected $fillable = [
         'name',
         'price',
-        'availabillity',
+        'medium_price',
+        'large_price',
+        'description',
+        'image_url',
+        'is_available',
         'category_id',
     ];
 
