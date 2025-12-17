@@ -7,7 +7,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\MenuItem;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
 
@@ -18,9 +18,7 @@ class OrderController extends Controller
     {
         $orders = Order::select('id','order_number','customer_name','order_type','status','total_amount','created_at')
             ->with([
-                'items' => function($q){
-                    $q->select(['id','order_id','menu_item_id','quantity','subtotal','size','add_ons']);
-                },
+                'items:id,order_id,menu_item_id,quantity,subtotal,size,add_ons',
                 'items.menuItem:id,name,price,medium_price,large_price'
             ])
             ->whereDate('created_at', today())
@@ -102,53 +100,13 @@ class OrderController extends Controller
                 })->toArray()
             );
 
-            // Update daily totals (no hourly columns required)
-            try {
-                $tz = config('app.timezone');
-                $date = $order->created_at->setTimezone($tz)->toDateString();
-
-                $existing = DB::table('order_daily_stats')->where('stat_date', $date)->first();
-                if ($existing) {
-                    DB::table('order_daily_stats')
-                        ->where('id', $existing->id)
-                        ->update([
-                            'revenue_sum' => DB::raw('revenue_sum + ' . (float) $order->total_amount),
-                            'order_count' => DB::raw('order_count + 1'),
-                            'updated_at' => now(),
-                        ]);
-                } else {
-                    DB::table('order_daily_stats')
-                        ->insert([
-                            'stat_date' => $date,
-                            'revenue_sum' => (float) $order->total_amount,
-                            'order_count' => 1,
-                            'created_at' => now(),
-                            'updated_at' => now(),
-                        ]);
-                }
-
-                $bestDayItem = DB::table('order_items')
-                    ->join('orders', 'order_items.order_id', '=', 'orders.id')
-                    ->whereDate('orders.created_at', $date)
-                    ->select('order_items.menu_item_id', DB::raw('SUM(order_items.quantity) as total_sold'))
-                    ->groupBy('order_items.menu_item_id')
-                    ->orderByDesc('total_sold')
-                    ->first();
-
-                if ($bestDayItem) {
-                    DB::table('order_daily_stats')
-                        ->where('stat_date', $date)
-                        ->update([
-                            'top_item_id' => $bestDayItem->menu_item_id,
-                            'top_item_quantity' => (int) $bestDayItem->total_sold,
-                            'updated_at' => now(),
-                        ]);
-                }
-            } catch (\Throwable $e) {
-                // swallow stats errors to not impact order creation
-            }
+            // Update daily stats
+            $this->updateDailyStats($order);
 
             DB::commit();
+            
+            // Clear dashboard cache
+            Cache::forget('dashboard_stats_' . today()->toDateString());
 
             return response()->json([
                 'message' => 'Order created successfully',
@@ -166,160 +124,187 @@ class OrderController extends Controller
 
     // Update order fields (status, etc)
     public function update(Request $request, $id)
-{
-    $order = Order::find($id);
-    
-    if (!$order) {
-        return response()->json(['error' => 'Order not found'], 404);
+    {
+        $order = Order::find($id);
+        
+        if (!$order) {
+            return response()->json(['error' => 'Order not found'], 404);
+        }
+        
+        $request->validate([
+            'status' => 'required|string|in:pending,preparing,ready,completed'
+        ]);
+        
+        $order->status = $request->status;
+        $order->save();
+        
+        // Clear cache when order status changes
+        Cache::forget('dashboard_stats_' . today()->toDateString());
+        
+        return response()->json([
+            'message' => 'Order updated successfully',
+            'order' => [
+                'id' => $order->id,
+                'status' => $order->status
+            ]
+        ], 200);
     }
-    
-    // Only allow updating status
-    $request->validate([
-        'status' => 'required|string|in:pending,preparing,ready,completed'
-    ]);
-    
-    $order->status = $request->status;
-    $order->save();
-    
-    return response()->json([
-        'message' => 'Order updated successfully',
-        'order' => [
-            'id' => $order->id,
-            'status' => $order->status
-        ]
-    ], 200);
-}
 
     // Mark as completed directly
     public function markAsCompleted($id)
     {
         $order = Order::findOrFail($id);
         $order->update(['status' => 'completed']);
+        
+        // Clear cache
+        Cache::forget('dashboard_stats_' . today()->toDateString());
+        
         return response()->json([
             'message' => 'Order marked as completed',
             'order' => $order->load('items.menuItem.category')
         ]);
     }
 
-    // Dashboard best selling item logic
-    // Optimized to reduce DB calls by combining aggregates
+    // Dashboard best selling item logic - OPTIMIZED WITH CACHING
     public function dashboardStats()
     {
-           
-           $orders = Order::with(['items'])
-           ->whereDate('created_at', today())
-            ->where('status', 'completed')
-            ->get();
-
-            $revenueToday = 0.0;
-        foreach ($orders as $order) {
-            foreach ($order->items as $it) {
-                $rawAddOns = $it->add_ons ?? [];
-                $addOns = is_string($rawAddOns) ? (json_decode($rawAddOns, true) ?: []) : (is_array($rawAddOns) ? $rawAddOns : []);
-                $addTotal = 0.0;
-                foreach ($addOns as $a) {
-                    $addTotal += (float) ($a['amount'] ?? 0);
-                }
-                $revenueToday += ((float) $it->item_price * (int) ($it->quantity ?? 0)) + $addTotal;
-            }
-        }
-        $orderCount = $orders->count();
-
-        // Find best selling item
-        $bestItemRow = DB::table('order_items')
-            ->join('orders', 'order_items.order_id', '=', 'orders.id')
-            ->whereDate('orders.created_at', today())
-            ->where('orders.status', 'completed')
-            ->select('order_items.menu_item_id', DB::raw('SUM(order_items.quantity) as total_sold'))
-            ->groupBy('order_items.menu_item_id')
-            ->orderByDesc('total_sold')
-            ->first();
-
-        // Eager load category to avoid N+1 if we were fetching multiple, though here it's just one
-        $bestSellingItem = $bestItemRow ? 
-            MenuItem::with('category')->find($bestItemRow->menu_item_id) : 
-            null;
-
-        return response()->json([
-            'today_revenue' => $revenueToday,
-            'order_count' => $orderCount,
-            'best_selling_item' => $bestSellingItem->name ?? 'N/A',
-            'best_selling_category' => $bestSellingItem->category->name ?? 'N/A',
-            'total_sold' => $bestItemRow->total_sold ?? 0,
-        ]);
-    }
-
-    // Admin weekly/daily statistics
-    public function adminStats()
-    {
-        $tz = config('app.timezone');
-        $now = Carbon::now($tz);
-        $start = (clone $now)->startOfWeek(Carbon::MONDAY);
-        $end = (clone $start)->endOfWeek(Carbon::SUNDAY);
-
-        $weeklyRevenue = [];
-        $weeklyOrders = [];
-        $days = [];
-        $dailyTopItems = [];
-
-        for ($d = 0; $d < 7; $d++) {
-            $date = (clone $start)->addDays($d);
-            $orders = Order::whereBetween('created_at', [
-                    (clone $date)->startOfDay(),
-                    (clone $date)->endOfDay()
-                ])
+        $cacheKey = 'dashboard_stats_' . today()->toDateString();
+        
+        return Cache::remember($cacheKey, now()->addMinutes(5), function () {
+            // Single optimized query using joins and aggregates
+            $stats = DB::table('orders')
+                ->select(
+                    DB::raw('SUM(total_amount) as revenue'),
+                    DB::raw('COUNT(*) as order_count')
+                )
+                ->whereDate('created_at', today())
                 ->where('status', 'completed')
-                ->get(['total_amount']);
-            $weeklyRevenue[] = (float) $orders->sum('total_amount');
-            $weeklyOrders[] = (int) $orders->count();
-            $days[] = $date->toDateString();
+                ->first();
 
-            $topRow = DB::table('order_items')
+            $revenueToday = (float) ($stats->revenue ?? 0);
+            $orderCount = (int) ($stats->order_count ?? 0);
+
+            // Find best selling item with single query
+            $bestItemRow = DB::table('order_items')
                 ->join('orders', 'order_items.order_id', '=', 'orders.id')
-                ->whereDate('orders.created_at', $date->toDateString())
+                ->join('menu_items', 'order_items.menu_item_id', '=', 'menu_items.id')
+                ->join('categories', 'menu_items.category_id', '=', 'categories.id')
+                ->select(
+                    'menu_items.name as item_name',
+                    'categories.name as category_name',
+                    DB::raw('SUM(order_items.quantity) as total_sold')
+                )
+                ->whereDate('orders.created_at', today())
                 ->where('orders.status', 'completed')
-                ->select('order_items.menu_item_id', DB::raw('SUM(order_items.quantity) as total_sold'))
-                ->groupBy('order_items.menu_item_id')
+                ->groupBy('order_items.menu_item_id', 'menu_items.name', 'categories.name')
                 ->orderByDesc('total_sold')
                 ->first();
-            $dailyTopItems[] = $topRow ? (MenuItem::find($topRow->menu_item_id)->name ?? 'N/A') : 'N/A';
-        }
 
-        $topItemRow = DB::table('order_items')
-            ->join('orders', 'order_items.order_id', '=', 'orders.id')
-            ->whereBetween('orders.created_at', [
-                (clone $start)->startOfDay(),
-                (clone $end)->endOfDay()
-            ])
-            ->where('orders.status', 'completed')
-            ->select('order_items.menu_item_id', DB::raw('SUM(order_items.quantity) as total_sold'))
-            ->groupBy('order_items.menu_item_id')
-            ->orderByDesc('total_sold')
-            ->first();
+            return response()->json([
+                'today_revenue' => $revenueToday,
+                'order_count' => $orderCount,
+                'best_selling_item' => $bestItemRow->item_name ?? 'N/A',
+                'best_selling_category' => $bestItemRow->category_name ?? 'N/A',
+                'total_sold' => $bestItemRow->total_sold ?? 0,
+            ]);
+        });
+    }
 
-        $weeklyTopItem = $topItemRow ? MenuItem::find($topItemRow->menu_item_id) : null;
+    // Admin weekly/daily statistics - OPTIMIZED
+    public function adminStats()
+    {
+        $cacheKey = 'admin_stats_week_' . now()->startOfWeek()->toDateString();
+        
+        return Cache::remember($cacheKey, now()->addMinutes(10), function () {
+            $tz = config('app.timezone');
+            $now = Carbon::now($tz);
+            $start = (clone $now)->startOfWeek(Carbon::MONDAY);
+            $end = (clone $start)->endOfWeek(Carbon::SUNDAY);
 
-        return response()->json([
-            'weeklyRevenue' => $weeklyRevenue,
-            'weeklyOrders' => $weeklyOrders,
-            'days' => $days,
-            'weeklyTopItem' => $weeklyTopItem ? $weeklyTopItem->name : 'N/A',
-            'dailyTopItems' => $dailyTopItems,
-        ]);
+            // Single query to get all week's data
+            $weeklyData = DB::table('orders')
+                ->select(
+                    DB::raw('DATE(created_at) as date'),
+                    DB::raw('SUM(total_amount) as revenue'),
+                    DB::raw('COUNT(*) as order_count')
+                )
+                ->whereBetween('created_at', [$start->startOfDay(), $end->endOfDay()])
+                ->where('status', 'completed')
+                ->groupBy('date')
+                ->get()
+                ->keyBy('date');
+
+            $weeklyRevenue = [];
+            $weeklyOrders = [];
+            $days = [];
+
+            for ($d = 0; $d < 7; $d++) {
+                $date = (clone $start)->addDays($d);
+                $dateStr = $date->toDateString();
+                $dayData = $weeklyData->get($dateStr);
+                
+                $weeklyRevenue[] = (float) ($dayData->revenue ?? 0);
+                $weeklyOrders[] = (int) ($dayData->order_count ?? 0);
+                $days[] = $dateStr;
+            }
+
+            // Get daily top items in a single query
+            $dailyTopItemsData = DB::table('order_items')
+                ->join('orders', 'order_items.order_id', '=', 'orders.id')
+                ->join('menu_items', 'order_items.menu_item_id', '=', 'menu_items.id')
+                ->select(
+                    DB::raw('DATE(orders.created_at) as date'),
+                    'menu_items.name',
+                    DB::raw('SUM(order_items.quantity) as total_sold'),
+                    DB::raw('ROW_NUMBER() OVER (PARTITION BY DATE(orders.created_at) ORDER BY SUM(order_items.quantity) DESC) as row_num')
+                )
+                ->whereBetween('orders.created_at', [$start->startOfDay(), $end->endOfDay()])
+                ->where('orders.status', 'completed')
+                ->groupBy(DB::raw('DATE(orders.created_at)'), 'order_items.menu_item_id', 'menu_items.name')
+                ->get()
+                ->where('row_num', 1)
+                ->keyBy('date');
+
+            $dailyTopItems = [];
+            foreach ($days as $dateStr) {
+                $topItem = $dailyTopItemsData->get($dateStr);
+                $dailyTopItems[] = $topItem ? $topItem->name : 'N/A';
+            }
+
+            // Get weekly top item
+            $topItemRow = DB::table('order_items')
+                ->join('orders', 'order_items.order_id', '=', 'orders.id')
+                ->join('menu_items', 'order_items.menu_item_id', '=', 'menu_items.id')
+                ->select(
+                    'menu_items.name',
+                    DB::raw('SUM(order_items.quantity) as total_sold')
+                )
+                ->whereBetween('orders.created_at', [$start->startOfDay(), $end->endOfDay()])
+                ->where('orders.status', 'completed')
+                ->groupBy('order_items.menu_item_id', 'menu_items.name')
+                ->orderByDesc('total_sold')
+                ->first();
+
+            return response()->json([
+                'weeklyRevenue' => $weeklyRevenue,
+                'weeklyOrders' => $weeklyOrders,
+                'days' => $days,
+                'weeklyTopItem' => $topItemRow ? $topItemRow->name : 'N/A',
+                'dailyTopItems' => $dailyTopItems,
+            ]);
+        });
     }
 
     public function show($id)
     {
         try {
-            $order = Order::with(['items.menuItem'])->find($id);
+            $order = Order::with(['items.menuItem:id,name,price,medium_price,large_price'])
+                ->find($id);
 
             if (!$order) {
-                return response()->json([
-                    'error' => 'Order not found'
-                ], 404);
+                return response()->json(['error' => 'Order not found'], 404);
             }
 
-            // Format items for frontend
             $items = $order->items->map(function ($item) {
                 return [
                     'id' => $item->id,
@@ -332,7 +317,6 @@ class OrderController extends Controller
                 ];
             });
 
-            // Final order structure
             return response()->json([
                 'order' => [
                     'id' => $order->id,
@@ -351,6 +335,47 @@ class OrderController extends Controller
                 'error' => 'Server error',
                 'message' => $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Update daily stats helper
+     */
+    private function updateDailyStats(Order $order): void
+    {
+        try {
+            $tz = config('app.timezone');
+            $date = $order->created_at->setTimezone($tz)->toDateString();
+
+            DB::table('order_daily_stats')->updateOrInsert(
+                ['stat_date' => $date],
+                [
+                    'revenue_sum' => DB::raw('revenue_sum + ' . (float) $order->total_amount),
+                    'order_count' => DB::raw('order_count + 1'),
+                    'updated_at' => now(),
+                ]
+            );
+
+            // Update top item
+            $bestDayItem = DB::table('order_items')
+                ->join('orders', 'order_items.order_id', '=', 'orders.id')
+                ->whereDate('orders.created_at', $date)
+                ->select('order_items.menu_item_id', DB::raw('SUM(order_items.quantity) as total_sold'))
+                ->groupBy('order_items.menu_item_id')
+                ->orderByDesc('total_sold')
+                ->first();
+
+            if ($bestDayItem) {
+                DB::table('order_daily_stats')
+                    ->where('stat_date', $date)
+                    ->update([
+                        'top_item_id' => $bestDayItem->menu_item_id,
+                        'top_item_quantity' => (int) $bestDayItem->total_sold,
+                        'updated_at' => now(),
+                    ]);
+            }
+        } catch (\Throwable $e) {
+            // Swallow stats errors
         }
     }
 }

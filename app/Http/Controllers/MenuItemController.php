@@ -29,7 +29,6 @@ class MenuItemController extends Controller
         $data = $request->validate([
             'name' => 'required|string',
             'price' => 'required|numeric',
-            'availabillity' => 'required|string',
             'medium_price' => 'nullable|numeric',
             'large_price' => 'nullable|numeric',
             'description' => 'nullable|string',
@@ -38,10 +37,12 @@ class MenuItemController extends Controller
             'image' => 'nullable|image|mimes:jpeg,jpg,png,webp|max:5120',
         ]);
 
+        // Default availability to true if not provided
         if (!array_key_exists('is_available', $data)) {
             $data['is_available'] = true;
         }
 
+        // Handle image upload
         if ($request->hasFile('image')) {
             $path = $request->file('image')->store('menu-images', 'public');
             $data['image_url'] = '/storage/' . $path;
@@ -61,23 +62,23 @@ class MenuItemController extends Controller
             'method' => $request->method(),
             'has_file' => $request->hasFile('image'),
             'remove_image' => $request->input('remove_image'),
-            'all_data' => $request->except(['image'])
+            'all_data' => $request->except(['image', '_method'])
         ]);
 
         $data = $request->validate([
             'name' => 'sometimes|string',
             'price' => 'sometimes|numeric',
-            'availabillity' => 'required|string',
             'medium_price' => 'nullable|numeric',
             'large_price' => 'nullable|numeric',
             'description' => 'nullable|string',
             'category_id' => 'sometimes|exists:categories,id',
             'is_available' => 'sometimes|boolean',
             'image' => 'nullable|image|mimes:jpeg,jpg,png,webp|max:5120',
+            'remove_image' => 'sometimes|string',
         ]);
 
         // Handle image removal
-        $removeImage = $request->input('remove_image') === '1' || $request->boolean('remove_image', false);
+        $removeImage = $request->input('remove_image') === '1';
         if ($removeImage && $menuItem->image_url) {
             $relative = str_replace('/storage/', '', $menuItem->image_url);
             $relative = ltrim($relative, '/');
@@ -104,6 +105,9 @@ class MenuItemController extends Controller
             $data['image_url'] = '/storage/' . $path;
             Log::info('New image uploaded', ['path' => $data['image_url']]);
         }
+
+        // Remove remove_image from data before updating
+        unset($data['remove_image']);
 
         $menuItem->update($data);
         Log::info('Menu item updated', ['item' => $menuItem]);
